@@ -12,7 +12,7 @@ function cfg() {
   const tenantId = ms.tenantId || c.tenantId || MS_AUTH_DEFAULT.tenantId, clientId = ms.clientId || c.clientId || MS_AUTH_DEFAULT.clientId;
   const scSite = (gl.siteUrl || ms.siteUrl || MS_AUTH_DEFAULT.siteUrl || '').replace(/\/+$/, ''), rabSite = (c.rabSiteUrl || '').replace(/\/+$/, '');
   const siteUrl = rabSite || scSite || (c.siteUrl || '').replace(/\/+$/, '');
-  return { mode: c.mode || (siteUrl && ((tenantId && clientId) || gl.accessToken) ? 'sp' : 'demo'), tenantId, clientId, siteUrl, scSite, rabSite, listNames: c.listNames || {} };
+  return { mode: c.mode || (location.protocol === 'file:' ? 'demo' : (siteUrl && ((tenantId && clientId) || gl.accessToken) ? 'sp' : 'demo')), tenantId, clientId, siteUrl, scSite, rabSite, listNames: c.listNames || {} };
 }
 function saveCfg(p) {
   const { tenantId, clientId, siteUrl, ...rest } = p;
@@ -255,15 +255,20 @@ function randomSalt() { const a = new Uint8Array(16); crypto.getRandomValues(a);
 /* Built-in administrator of SC Mngt (salted hash only — the password itself is not in the file) */
 const BUILTIN_USER = { username: 'nader', displayName: 'Nader Al Najjar', role: 'admin', salt: '38235b55aa4aa5abc05404b8afcdf9c4', hash: '78e0211c590b958a30c0d5d1bc1063a064a37e9ae76b64961e92b47c3c869c1a' };
 const Users = {
-  list: [],
-  save() { try { localStorage.setItem(LS_BASE + '_users', JSON.stringify(this.list)); } catch (e) {} },
+  list: [], ready: null,
+  key() { return cfg().mode === 'demo' ? APP.ls + '_demo_users' : LS_BASE + '_users'; },   // demo users never mix with the SC Mngt users
+  save() { try { localStorage.setItem(this.key(), JSON.stringify(this.list)); } catch (e) {} },
   find(n) { const u = String(n || '').trim().toLowerCase(); return this.list.find(x => String(x.username).toLowerCase() === u || (x.email && String(x.email).toLowerCase() === u)); },
-  async load() {
-    try { this.list = JSON.parse(localStorage.getItem(LS_BASE + '_users') || '[]') || []; } catch (e) { this.list = []; }
+  load() { return this.ready = this.load0(); },
+  async load0() {
+    try { this.list = JSON.parse(localStorage.getItem(this.key()) || '[]') || []; } catch (e) { this.list = []; }
     const b = this.list.find(x => String(x.username).toLowerCase() === BUILTIN_USER.username);
     if (b) { b.builtin = true; b.role = 'admin'; if (!b.salt || !b.hash) { b.salt = BUILTIN_USER.salt; b.hash = BUILTIN_USER.hash; } }
     else this.list.unshift({ id: uidGen(), username: BUILTIN_USER.username, displayName: BUILTIN_USER.displayName, role: 'admin', salt: BUILTIN_USER.salt, hash: BUILTIN_USER.hash, builtin: true, mustChangePassword: false, allowedLists: [], editableLists: [], createdAt: Date.now(), lastLogin: null });
-    if (!this.list.some(x => !x.builtin)) {   // first run on this web address: admin / admin (+ a demo operator in demo mode)
+    if (cfg().mode === 'demo') {   // demo: admin / admin and store / 1234 are always there
+      if (!this.find('admin')) { const s = randomSalt(); this.list.push({ id: uidGen(), username: 'admin', displayName: 'Administrator', role: 'admin', salt: s, hash: await hashPassword('admin', s), allowedLists: [], editableLists: [], createdAt: Date.now(), lastLogin: null }); }
+      if (!this.find('store')) { const s2 = randomSalt(); this.list.push({ id: uidGen(), username: 'store', displayName: 'Imran Khan', role: 'operator', jobTitle: 'Storekeeper', email: 'store@example.com', salt: s2, hash: await hashPassword('1234', s2), allowedLists: [], editableLists: [], createdAt: Date.now(), lastLogin: null }); }
+    } else if (!this.list.some(x => !x.builtin)) {   // first run on this web address: admin / admin (must change the password)
       const s = randomSalt(); this.list.push({ id: uidGen(), username: 'admin', displayName: 'Administrator', role: 'admin', salt: s, hash: await hashPassword('admin', s), mustChangePassword: !(cfg().mode === 'demo'), allowedLists: [], editableLists: [], createdAt: Date.now(), lastLogin: null });
       if (cfg().mode === 'demo') { const s2 = randomSalt(); this.list.push({ id: uidGen(), username: 'store', displayName: 'Imran Khan', role: 'operator', jobTitle: 'Storekeeper', email: 'store@example.com', salt: s2, hash: await hashPassword('1234', s2), allowedLists: [], editableLists: [], createdAt: Date.now(), lastLogin: null }); }
     }
@@ -361,11 +366,12 @@ const Auth = {
   session(u) { this.rec = u; this.user = { id: u.id, name: u.username, full: u.displayName || u.username, level: (u.builtin ? 'Built-in admin' : (ROLES[u.role] || ROLES.operator).label), role: u.role, super: !!u.builtin, email: u.email, jobTitle: u.jobTitle, locationId: u.locationId, _id: u.spItem || null }; sessionStorage.setItem(APP.ls + '_user', u.id); return this.user; },
   restore() { const id = sessionStorage.getItem(APP.ls + '_user'); const u = id && Users.list.find(x => x.id === id); return u ? this.session(u) : null; },
   async login(name, pw) {
+    await (Users.ready || Users.load());
     const c = lulCfg(), spOn = c.on && c.pwOn && DB.isSP();
     let u = Users.find(name);
     if (u && u.hash && (await hashPassword(pw, u.salt)) === u.hash) { /* local password */ }
     else if (spOn && !(u && u.builtin)) { const r = await lulLogin(name, pw); if (r.state !== 'ok') throw new Error(r.state === 'unreach' ? 'Could not reach the SharePoint login list: ' + r.msg : r.msg); u = r.user; }
-    else throw new Error('Invalid username or password.');
+    else throw new Error(DB.isSP() ? 'Invalid username or password. On this web address the users are the SC Mngt users — sign in with your SC Mngt user name and password.' : 'Invalid username or password. (Demo: admin / admin or store / 1234)');
     u.lastLogin = Date.now(); Users.save();
     if (u.spItem && DB.isSP()) { try { const rows = await DB.all(USERS_LIST); const e = rows.find(x => x._id === u.spItem); if (e) { e.Last_Login_TimeStamp = nowIso(); e.Current_Login_Status = 'Online'; DB._sys = 1; DB.save(USERS_LIST, e).catch(() => {}).finally(() => { DB._sys = 0; }); } } catch (e) {} }
     return this.session(u);
