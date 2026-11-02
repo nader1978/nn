@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NFPC Supply Chain System</title>
+<link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d4ed8'/%3E%3Ctext x='32' y='44' font-size='34' text-anchor='middle'%3E%F0%9F%8F%AD%3C/text%3E%3C/svg%3E" />
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="css/app.css">
+<script>try{var a=localStorage.getItem('sp_dashboard_secure_v12_accent');if(a&&a!=='blue')document.documentElement.setAttribute('data-accent',a)}catch(e){}</script>
+</head>
+<body>
+<!-- ================= LOGIN (same layout as SC Mngt) ================= -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo"><img data-brand="full" alt="" style="display:none"></div>
+    <div class="login-brand">
+      <div class="logo" data-brand="logo">🔐</div>
+      <div><h1 data-brand="name">NFPC Supply Chain System</h1><div class="tagline" data-brand="tag">Warehouse · Distribution · Fleet · Finance · HR</div></div>
+    </div>
+    <form class="login-form" id="loginForm" autocomplete="off">
+      <div class="form-group"><label for="loginUser">Username</label><input type="text" id="loginUser" autocomplete="username" required></div>
+      <div class="form-group"><label for="loginPw">Password</label><input type="password" id="loginPw" autocomplete="current-password" required></div>
+      <button type="submit" id="loginBtn">Sign in</button>
+      <div class="login-error" id="loginError"></div>
+    </form>
+    <div class="login-ms" id="msBox" style="display:none">
+      <div id="msLoginState">🔑 You are not connected to Microsoft 365 yet — SharePoint data cannot be read or saved.</div>
+      <button type="button" id="msLoginBtn">Renew Microsoft session</button>
+      <div>A Microsoft sign-in window opens — use <b>your own</b> account. No administrator is needed.</div>
+    </div>
+    <div class="login-hint" id="loginHint"></div>
+  </div>
+</div>
+
+<!-- ================= APP ================= -->
+<div class="app-shell" id="appShell"><div class="m-backdrop" id="mBackdrop"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-brand" id="sbBrand" title="Switchboard — main page"><div class="logo" data-brand="logo">🏭</div><span data-brand="name" id="sbCompany">NFPC Supply Chain System</span></div>
+      <div class="sidebar-tagline" data-brand="tag2">Supply Chain Edition</div>
+      <button type="button" class="sb-toggle" id="sbToggle" title="Narrow / wide side panel">«</button>
+    </div>
+    <div class="user-card">
+      <div class="avatar" id="uAvatar">?</div>
+      <div class="user-info"><div class="user-name" id="uName">—</div><div class="user-role" id="uRole">—</div></div>
+      <button class="logout-btn" id="myInfoBtn" title="My account" style="margin-right:4px">✉</button>
+      <button class="logout-btn" id="logoutBtn" title="Sign out">⏻</button>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-tools"><button type="button" id="navCollapseAll">▸ Collapse all</button><button type="button" id="navExpandAll">▾ Expand all</button></div>
+      <div id="nav"></div>
+    </nav>
+    <div class="sidebar-footer"><div>v1.0 · NFPC Supply Chain</div><div style="margin-top:2px" id="sbMode">Signed in</div><div id="sbBuild" style="margin-top:2px;font-weight:700;opacity:.95"></div></div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-left" style="display:flex;align-items:center;min-width:0">
+        <button type="button" class="m-menu-btn" id="menuBtn" aria-label="Menu">☰</button>
+        <button type="button" class="icon-btn wide" id="backBtn" title="Back to the previous page (Alt+←)" style="margin-right:8px" disabled>← Back</button>
+        <div class="tb-logo" data-brand="logo">🏭</div>
+        <div style="margin-left:14px;min-width:0"><div class="topbar-title" id="pgTitle">Switchboard</div><div class="topbar-sub" id="pgSub"></div></div>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn wide" id="searchPill" title="Search everything (Ctrl+K)">🔎 Search</button>
+        <button class="icon-btn wide" id="msReloginBtn" title="Sign in to Microsoft again to refresh your access token">🔑 Re-login</button>
+        <button class="token-pill" id="connPill" title="SharePoint connection"><span class="dot"></span><span id="connText">No token</span></button>
+        <button class="icon-btn wide" id="refreshBtn" title="Reload this section's SharePoint data">🔄 Refresh</button>
+        <button class="icon-btn" id="themeBtn" title="Toggle dark mode">🌙</button>
+        <button class="icon-btn badge-dot" id="activityToggle" title="Recent activity">🕘</button>
+      </div>
+    </header>
+    <main class="content" id="content"></main>
+  </div>
+</div>
+
+<div class="activity-backdrop" id="activityBackdrop"></div>
+<div class="activity-drawer" id="activityDrawer">
+  <div class="activity-header"><h3>🕘 Recent Activity</h3><button class="icon-btn" id="activityCloseBtn">✖</button></div>
+  <div class="activity-body" id="activityBody"><div class="activity-empty">No activity yet.</div></div>
+  <div class="activity-footer"><button class="ghost small" id="activityClearBtn">🗑 Clear Log</button><button class="secondary small" id="activityExportBtn">⬇ Export Log</button></div>
+</div>
+
+<div class="modal-bg" id="modalBg"><div class="modal" id="modal"><div class="modal-head"><span id="modalTitle"></span><button class="x-btn" id="modalX">✕</button></div><div class="modal-body" id="modalBody"></div><div class="modal-foot" id="modalFoot"></div></div></div>
+<div id="toasts"></div>
+
+<script src="js/00-config.js"></script>
+<script src="js/00b-nfpc-access-config.js"></script>
+<script src="js/01-core.js"></script>
+<script src="js/02-data.js"></script>
+<script src="js/03-ui.js"></script>
+<script src="js/04-logic.js"></script>
+<script src="js/05-pages-main.js"></script>
+<script src="js/06-print.js"></script>
+<script src="js/07-pages-access-forms.js"></script>
+<script src="js/08-reports.js"></script>
+<script src="js/09-admin-boot.js"></script>
+</body>
+</html>
