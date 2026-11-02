@@ -49,12 +49,13 @@ function genericRender(P) {
       onDelete: async rec => { for (const S of subs.filter(S => isEditableSub(P, S))) { const pv = linkVal(rec[S.link.p]); if (pv === null) continue; const ls = DB.peek(S.table).filter(l => linkVal(l[S.link.c]) === pv); if (ls.length && await confirmBox(`Also delete the ${ls.length} line(s) of this record (${esc(S.table)})?`, 'Delete lines', true)) await DB.bulk(ls.map(l => () => DB.remove(S.table, l))); } },
       buttons: rec => [
         ...(rec ? [{ label: '🖨 Print', cls: 'ghost', onClick: () => printRecord(P, DB.peek(k).find(x => x._id === rec._id) || rec) }] : []),
-        ...(rec ? (ACTIONS[k] || []).filter(a => a.when(rec) && (!a.admin || Auth.isAdmin())).map(a => ({ label: a.label, cls: a.cls, onClick: async () => {
+        ...(rec ? (ACTIONS[k] || []).filter(a => a.when(rec) && (!a.admin || Auth.isAdmin()) && Auth.feat('post') && !Auth.ro()).map(a => ({ label: a.label, cls: a.cls, onClick: async () => {
           try { const fresh = { ...(DB.peek(k).find(x => x._id === rec._id) || rec) }; const ctx = { lines: t => { const S = subs.find(s => s.table === t); if (!S) return []; const pv = linkVal(fresh[S.link.p]); return pv === null ? [] : DB.peek(t).filter(l => linkVal(l[S.link.c]) === pv).map(l => ({ ...l })); } };
             const m = await a.run(fresh, ctx); if (m === null) return; toast(m, 'success', 6000); Activity.add('📌', `${humanize(P.form)}: ${m}`); Modal.close(); lp.refresh(); } catch (e) { toast(e.message, 'error', 7000); } } })) : [])],
     });
     const tb = $('.toolbar', v);
-    tb.insertAdjacentHTML('beforeend', `<button class="ghost small" data-pl title="Print this list">🖨 Print</button>`);
+    tb.insertAdjacentHTML('beforeend', `<button class="ghost small" data-pl title="Print this list">🖨 Print</button><button class="ghost small" data-ml title="Send this list by email (Excel attached)">✉ Email</button>`);
+    $('[data-ml]', v).onclick = async () => { if (Auth.block('email')) return; const rows = lp.rows(), cs = cols.map(c => ({ ...c, html: null })); try { const b64 = await mailList_xlsx(humanize(P.form), rows, cs); mailDialog({ subject: `${humanize(P.form)} — ${rows.length} record(s)`, what: 'the list', html: tableHtml(rows.slice(0, 50), cs) + (rows.length > 50 ? `<p>… and ${rows.length - 50} more rows in the attached Excel file.</p>` : ''), attachment: b64 ? { fileName: humanize(P.form).replace(/[^\w\- ]+/g, '') + '.xlsx', dataB64: b64 } : null }); } catch (e) { toast(e.message, 'error'); } };
     $('[data-pl]', v).onclick = () => printTable(humanize(P.form), lp.rows(), cols.map(c => ({ ...c, html: null })));
     if (R.where) tb.insertAdjacentHTML('afterbegin', `<span class="badge info" title="Same filter as the Access form">filtered view</span>`);
     lp.refresh();

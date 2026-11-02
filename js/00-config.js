@@ -11,6 +11,8 @@ const MS_AUTH_DEFAULT = {
   siteUrl:  ''    // e.g. 'https://yourtenant.sharepoint.com/sites/nfpc_WLOps_APP'
 };
 /* System name & logo override (Settings → System name & logo → Copy default) */
-const BRAND_DEFAULT = { name: '', tag: '', logo: '', img: '' };
+const BRAND_DEFAULT = { name: '', tag: '', logo: '', img: '', co: {}, sb: {} };
+/* Switchboard (main page) look for every browser (Settings → Switchboard appearance → Copy default) */
+const HOME_DEFAULT = { style: 'A', accent: '', font: '', scale: 100, radius: 16 };
 /* Logo pictures (optional): icon = side panel / top bar, full = sign-in page & documents. Empty = the 🏭 logo text. */
 const LOGO_FILES = { icon: '', full: '' };

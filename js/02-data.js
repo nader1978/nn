@@ -12,7 +12,7 @@ function cfg() {
   const tenantId = ms.tenantId || c.tenantId || MS_AUTH_DEFAULT.tenantId, clientId = ms.clientId || c.clientId || MS_AUTH_DEFAULT.clientId;
   const scSite = (gl.siteUrl || ms.siteUrl || MS_AUTH_DEFAULT.siteUrl || '').replace(/\/+$/, ''), rabSite = (c.rabSiteUrl || '').replace(/\/+$/, '');
   const siteUrl = rabSite || scSite || (c.siteUrl || '').replace(/\/+$/, '');
-  return { mode: c.mode || (tenantId && clientId && siteUrl ? 'sp' : 'demo'), tenantId, clientId, siteUrl, scSite, rabSite, listNames: c.listNames || {} };
+  return { mode: c.mode || (siteUrl && ((tenantId && clientId) || gl.accessToken) ? 'sp' : 'demo'), tenantId, clientId, siteUrl, scSite, rabSite, listNames: c.listNames || {} };
 }
 function saveCfg(p) {
   const { tenantId, clientId, siteUrl, ...rest } = p;
@@ -46,7 +46,10 @@ const MS = {
     try { res = await app.acquireTokenSilent({ scopes: this.manageScopes, account: acct }); } catch (e) { if (!interactive) throw e; res = await app.acquireTokenPopup({ scopes: this.manageScopes, account: acct }); }
     this.mtoken = res.accessToken; this.mexp = +new Date(res.expiresOn || Date.now() + 3000000); return this.mtoken;
   },
+  /* shared Bearer token (Settings → Global Access Token, or the sp_token.json file) — used when Microsoft sign-in is not set up */
+  shared() { const t = scGet(SC_KEY.global).accessToken || ''; if (!t) return ''; try { const j = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); if (j.exp && j.exp * 1000 < Date.now() + 60000) return ''; } catch (e) {} return t; },
   async getToken(interactive = false) {
+    { const c = cfg(); if (!c.tenantId || !c.clientId) { const t = this.shared(); if (t) return t; } }
     if (this.manage) return this.getManageToken(interactive);
     if (this.token && Date.now() < this.exp - 120000) return this.token;
     const app = await this.init(); let acct = this.account || app.getAllAccounts()[0]; let res;
@@ -238,37 +241,135 @@ const DB = {
 const Bus = { h: {}, on(e, f) { (this.h[e] = this.h[e] || []).push(f); }, emit(e, ...a) { (this.h[e] || []).forEach(f => { try { f(...a); } catch (x) { console.error(x); } }); } };
 
 /* =====================================================================
-   USERS & ROLES — Employees list, DbUser = Yes (like LoginUsersWindow)
+   USERS & ROLES — the same user store, roles and password format as NFPC SC Mngt
+   (localStorage "sp_dashboard_secure_v12_users"): on the same web address both systems share
+   their users. Optional SharePoint login control (LoginUserList, settings shared with SC Mngt).
    ===================================================================== */
-/* Users = the SharePoint list "LoginUserList" (same list SC Mngt uses for login control).
-   Access_Level: Admin / Manager = every page; any other level = every module except Admin. */
+const LS_BASE = SC_LS;
 const USERS_LIST = 'LoginUserList';
-const ADMIN_LEVELS = /^(admin|administrator|manager|super|it)/i;
+const ROLES = { viewer: { label: 'Viewer' }, operator: { label: 'Operator' }, admin: { label: 'Admin' } };
+const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const uidGen = () => Math.random().toString(36).slice(2, 10);
+async function hashPassword(password, salt) { let h = salt + ':' + password; for (let i = 0; i < 10000; i++) h = await sha256(h); return h; }
+function randomSalt() { const a = new Uint8Array(16); crypto.getRandomValues(a); return [...a].map(b => b.toString(16).padStart(2, '0')).join(''); }
+/* Built-in administrator of SC Mngt (salted hash only — the password itself is not in the file) */
+const BUILTIN_USER = { username: 'nader', displayName: 'Nader Al Najjar', role: 'admin', salt: '38235b55aa4aa5abc05404b8afcdf9c4', hash: '78e0211c590b958a30c0d5d1bc1063a064a37e9ae76b64961e92b47c3c869c1a' };
+const Users = {
+  list: [],
+  save() { try { localStorage.setItem(LS_BASE + '_users', JSON.stringify(this.list)); } catch (e) {} },
+  find(n) { const u = String(n || '').trim().toLowerCase(); return this.list.find(x => String(x.username).toLowerCase() === u || (x.email && String(x.email).toLowerCase() === u)); },
+  async load() {
+    try { this.list = JSON.parse(localStorage.getItem(LS_BASE + '_users') || '[]') || []; } catch (e) { this.list = []; }
+    const b = this.list.find(x => String(x.username).toLowerCase() === BUILTIN_USER.username);
+    if (b) { b.builtin = true; b.role = 'admin'; if (!b.salt || !b.hash) { b.salt = BUILTIN_USER.salt; b.hash = BUILTIN_USER.hash; } }
+    else this.list.unshift({ id: uidGen(), username: BUILTIN_USER.username, displayName: BUILTIN_USER.displayName, role: 'admin', salt: BUILTIN_USER.salt, hash: BUILTIN_USER.hash, builtin: true, mustChangePassword: false, allowedLists: [], editableLists: [], createdAt: Date.now(), lastLogin: null });
+    if (!this.list.some(x => !x.builtin)) {   // first run on this web address: admin / admin (+ a demo operator in demo mode)
+      const s = randomSalt(); this.list.push({ id: uidGen(), username: 'admin', displayName: 'Administrator', role: 'admin', salt: s, hash: await hashPassword('admin', s), mustChangePassword: !(cfg().mode === 'demo'), allowedLists: [], editableLists: [], createdAt: Date.now(), lastLogin: null });
+      if (cfg().mode === 'demo') { const s2 = randomSalt(); this.list.push({ id: uidGen(), username: 'store', displayName: 'Imran Khan', role: 'operator', jobTitle: 'Storekeeper', email: 'store@example.com', salt: s2, hash: await hashPassword('1234', s2), allowedLists: [], editableLists: [], createdAt: Date.now(), lastLogin: null }); }
+    }
+    this.save();
+  },
+};
+/* ---- login control: users checked against a SharePoint list (same settings key as SC Mngt) ---- */
+const LUL_DEFAULT = { on: false, list: 'LoginUserList', allow: 'Allow_More_VMs', user: '', adm: true, pwOn: true, pw: 'Password', role: 'Role' };
+const LUL_KEY = LS_BASE + '_lulcfg';
+function lulCfg() { let c = {}; try { c = JSON.parse(localStorage.getItem(LUL_KEY) || '{}') || {}; } catch (e) {} const D = LUL_DEFAULT; return { on: c.on === undefined ? D.on : !!c.on, list: (c.list || D.list).trim(), allow: (c.allow || D.allow).trim(), user: (c.user || '').trim(), adm: c.adm === undefined ? D.adm : !!c.adm, pwOn: c.pwOn === undefined ? D.pwOn : !!c.pwOn, pw: (c.pw || D.pw).trim(), role: (c.role || D.role).trim() }; }
+const lulNorm = x => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const lulTrue = v => v === true || /^(true|yes|y|1|-1)$/i.test(String(v == null ? '' : (typeof v === 'object' ? v.Value : v)).trim());
+function lulVals(v) { if (v == null) return []; if (Array.isArray(v)) return v.flatMap(lulVals); if (typeof v === 'object') return [v.Email, v.LookupValue, v.Value, v.Title, v.DisplayName, v.EMail].filter(Boolean).map(String); return [String(v)]; }
+function lulKey(f, want) { if (want in f) return want; const n = lulNorm(want); return Object.keys(f).find(k => lulNorm(k) === n) || null; }
+function lulUserKeys(f, col) { if (col) { const k = lulKey(f, col); return k ? [k] : []; } return Object.keys(f).filter(k => !/^(@|_|id$|attachments|content|edit|modified|created|author|editor|linktitle|appauthor|appeditor|itemchild|folderchild|compliance)/i.test(k)); }
+/* raw SharePoint items of any list by name (existing NFPC lists keep their own site) */
+async function spRawItems(name) {
+  const k = Object.keys(LISTS).find(x => norm(x) === norm(name) || norm(LISTS[x].name) === norm(name));
+  const sid = k ? await SP.site(k) : await SP.siteIdFor(cfg().scSite || cfg().siteUrl);
+  if (!SP.siteLists[sid]) { const out = []; let url = `/sites/${sid}/lists?$select=id,displayName,name&$top=999`; while (url) { const j = await gfetch(url); out.push(...(j.value || [])); url = j['@odata.nextLink'] || null; } SP.siteLists[sid] = out; }
+  const hit = SP.siteLists[sid].find(l => norm(l.displayName) === norm(name) || norm(l.name) === norm(name)); if (!hit) { const e = new Error(`List “${name}” not found`); e.status = 404; throw e; }
+  const items = []; let url = `/sites/${sid}/lists/${hit.id}/items?expand=fields&$top=999`; while (url) { const j = await gfetch(url); items.push(...(j.value || [])); url = j['@odata.nextLink'] || null; }
+  return { sid, lid: hit.id, items };
+}
+async function lulFetch() {
+  if (!DB.isSP()) return { state: 'notoken', msg: 'Demo data mode' };
+  try { await MS.getToken(false); } catch (e) { return { state: 'notoken', msg: e.message }; }
+  try { return { state: 'ok', ...(await spRawItems(lulCfg().list)) }; }
+  catch (e) { return { state: e.status === 404 ? 'nolist' : /\b(401|403)\b/.test(String(e.status)) ? 'notoken' : 'error', msg: e.message }; }
+}
+function lulIdentities(u) { const ids = new Set(); const add = v => { v = String(v || '').trim().toLowerCase(); if (v) ids.add(v); }; if (u) { add(u.email); add(u.username); add(u.displayName); } try { const a = MS.app && MS.app.getAllAccounts()[0]; if (a) { add(a.username); add(a.name); } } catch (e) {} return [...ids]; }
+function lulJudge(items, u) {
+  const c = lulCfg(), ids = lulIdentities(u), M = [];
+  items.forEach(it => { const f = it.fields || {}, keys = lulUserKeys(f, c.user); let tier = -1; for (let i = 0; i < ids.length && tier < 0; i++) if (keys.some(k => lulVals(f[k]).some(v => String(v).trim().toLowerCase() === ids[i]))) tier = i;
+    if (tier >= 0) { const ak = lulKey(f, c.allow); M.push({ f, tier, allow: ak ? lulTrue(f[ak]) : false, hasCol: !!ak, raw: ak ? lulVals(f[ak]).join('/') || '(empty)' : '(no column)' }); } });
+  if (!M.length) return { found: false, allowed: false, ids };
+  const t = Math.min(...M.map(h => h.tier)), hits = M.filter(h => h.tier === t), detail = `Matched on “${ids[t]}” — ${hits.length} row(s), ${c.allow} = ${hits.map(h => h.raw).join(' , ')}`;
+  if (!hits.some(h => h.hasCol)) return { found: true, allowed: false, noCol: true, ids, detail };
+  return { found: true, allowed: hits.some(h => h.allow), ids, detail, f: (hits.find(h => h.allow) || hits[0]).f };
+}
+async function lulLogin(username, password) {
+  const c = lulCfg(), un = String(username || '').trim().toLowerCase(), bad = { state: 'bad', msg: 'Invalid username or password.' };
+  const r = await lulFetch(); if (r.state !== 'ok') return { state: 'unreach', msg: r.msg || r.state };
+  const rows = r.items.filter(it => { const f = it.fields || {}; return lulUserKeys(f, c.user).some(k => lulVals(f[k]).some(v => String(v).trim().toLowerCase() === un)); });
+  if (!rows.length) return bad;
+  let ok = false, off = false, role = '', email = '', name = '', title = '', loc = '', id = null;
+  for (const it of rows) { const f = it.fields || {}, pk = lulKey(f, c.pw); if (!pk) continue; const stored = String(lulVals(f[pk])[0] || '').trim(); if (!stored) continue;
+    const s2 = stored.replace(/^sha256:/i, ''), pass = /^[a-f0-9]{64}$/i.test(s2) ? (await sha256(password)).toLowerCase() === s2.toLowerCase() : stored === password; if (!pass) continue;
+    const ak = lulKey(f, c.allow); if (!ak || !lulTrue(f[ak])) { off = true; continue; }
+    ok = true; id = String(it.id); const rk = lulKey(f, c.role) || lulKey(f, 'Access_Level'); role = rk ? String(lulVals(f[rk])[0] || '').trim().toLowerCase() : '';
+    const ek = Object.keys(f).find(k => /^e-?mail|email|mail$|email_id/i.test(k)); email = ek ? String(lulVals(f[ek])[0] || '') : '';
+    const nk = Object.keys(f).find(k => /display ?name|fullname|^name$|^title$/i.test(k)); name = nk ? String(lulVals(f[nk])[0] || '') : '';
+    const tk = Object.keys(f).find(k => /job.?title|designation/i.test(k)); title = tk ? String(lulVals(f[tk])[0] || '') : '';
+    const lk = Object.keys(f).find(k => lulNorm(k) === 'locationid'); loc = lk ? String(lulVals(f[lk])[0] || '') : ''; break; }
+  if (!ok) return off ? { state: 'off', msg: 'Your account is deactivated. Please contact the administrator.' } : bad;
+  role = /admin|manager|super/.test(role) ? 'admin' : /view|read/.test(role) ? 'viewer' : 'operator';
+  let u = Users.find(username); if (u && u.builtin) return { state: 'ok', user: u };
+  if (!u) { u = { id: uidGen(), username: String(username).trim(), displayName: name || String(username).trim(), role, salt: '', hash: '', email, managerEmail: '', jobTitle: title, allowedLists: [], editableLists: [], createdAt: Date.now(), lastLogin: null, fromSP: true }; Users.list.push(u); }
+  else { u.role = role; if (email && !u.email) u.email = email; if (name && !u.displayName) u.displayName = name; if (title) u.jobTitle = title; u.fromSP = true; }
+  if (loc && u.locUser !== 1) u.locationId = loc; u.spItem = id; return { state: 'ok', user: u };
+}
+/* ---- per-user options (Users & Roles → 🎛 Options; absent = allowed) ---- */
+const FEAT_LIST = [
+  ['excel', '📊 Excel export', 'Download .xlsx files from any list or report'],
+  ['email', '✉ Email', 'Send documents and lists by email'],
+  ['print', '🖨 Print', 'Print records, lists and reports'],
+  ['import', '⬆ Excel import', 'Import rows from Excel / CSV into a list'],
+  ['delete', '🗑 Delete records', 'Delete records and lines'],
+  ['post', '📌 Post / approve', 'Post stock movements, approve LPOs and repairs, post GL batches'],
+  ['xlstyle', '🎨 Excel style settings', 'Change the Excel export style and the company name'],
+];
 const Auth = {
-  user: null,
-  can(page) {
-    const u = this.user; if (!u) return false; if (u.super || ['home', 'settings', 'help', 'dash', 'reports'].includes(page)) return true;
-    const P = PAGES.find(p => p.id === page); if (!P) return false;
-    if (P.sec === 'Admin' || P.adminOnly) return this.isAdmin();
-    if (u.groups && u.groups.length) return u.groups.includes(P.sec);
-    return true;
+  user: null, rec: null,
+  isAdmin() { const u = this.rec; return !!u && u.role === 'admin'; },
+  feat(k) { const u = this.rec; return !u || u.role === 'admin' || !(u.nfpcFeatures && u.nfpcFeatures[k] === false); },
+  block(k) { if (this.feat(k)) return false; const f = FEAT_LIST.find(x => x[0] === k); toast('🔒 ' + (f ? f[1].replace(/^\S+\s/, '') : k) + ' is switched off for your account. Contact an administrator.', 'warn', 5000); return true; },
+  listVisible(k) { const u = this.rec; if (!u || u.role === 'admin') return true; const a = u.nfpcLists && u.nfpcLists.visible; return !a || !a.length || a.includes(k); },
+  listEditable(k) { const u = this.rec; if (!u || u.role === 'admin') return true; if (u.role === 'viewer') return false; const L = u.nfpcLists || {}; const e = L.editable && L.editable.length ? L.editable : L.visible; return !e || !e.length || e.includes(k); },
+  /* 'full' | 'view' | 'none' for a page */
+  level(page) {
+    const u = this.rec; if (!u) return 'none'; if (u.role === 'admin') return 'full';
+    if (['home', 'help', 'settings', 'dash', 'reports'].includes(page)) return u.role === 'viewer' && page !== 'settings' ? 'view' : 'full';
+    const P = PAGES.find(p => p.id === page); if (!P) return 'none';
+    if (P.sec === 'Admin' || P.adminOnly) return 'none';
+    if (P.gen && !this.listVisible(P.gen.table)) return 'none';
+    const ov = u.nfpcSections || {};
+    if (page in ov) return ov[page] === false ? 'none' : ov[page] === 'view' ? 'view' : (u.role === 'viewer' ? 'view' : 'full');
+    if (typeof tpAllows === 'function' && !tpAllows(u, P)) return 'none';
+    if (u.role === 'viewer') return 'view';
+    if (P.gen && !this.listEditable(P.gen.table)) return 'view';
+    return 'full';
   },
-  isAdmin() { const u = this.user; return !!u && (u.super || ADMIN_LEVELS.test(u.level || '')); },
+  can(page) { return this.level(page) !== 'none'; },
+  ro(page) { return this.level(page || (Nav.cur && Nav.cur.id)) === 'view'; },
+  session(u) { this.rec = u; this.user = { id: u.id, name: u.username, full: u.displayName || u.username, level: (u.builtin ? 'Built-in admin' : (ROLES[u.role] || ROLES.operator).label), role: u.role, super: !!u.builtin, email: u.email, jobTitle: u.jobTitle, locationId: u.locationId, _id: u.spItem || null }; sessionStorage.setItem(APP.ls + '_user', u.id); return this.user; },
+  restore() { const id = sessionStorage.getItem(APP.ls + '_user'); const u = id && Users.list.find(x => x.id === id); return u ? this.session(u) : null; },
   async login(name, pw) {
-    const users = (await DB.all(USERS_LIST, true)).filter(e => e.User_Name || e.Email_ID);
-    if (!users.length && DB.isSP()) { this.user = { name: name || MS.user() || 'Administrator', level: 'Admin', super: true, bootstrap: true }; return this.user; }
-    const q = String(name).trim().toLowerCase();
-    const u = users.find(e => String(e.User_Name || '').toLowerCase() === q || String(e.Email_ID || '').toLowerCase() === q);
-    if (!u) throw new Error('Unknown user name.');
-    if (/^(no|false|blocked|inactive|disabled)$/i.test(String(u.Current_Login_Status || '')) && /block/i.test(String(u.Dtls || ''))) throw new Error('This user is blocked. Ask the administrator.');
-    const h = await sha256(pw), stored = String(u.Password || '');
-    const ok = stored === 'sha256:' + h || stored.toLowerCase() === h || stored === pw;
-    if (!ok) throw new Error('Wrong password.');
-    u.Last_Login_TimeStamp = nowIso(); u.Current_Login_Status = 'Online';
-    DB.save(USERS_LIST, u).catch(() => {});
-    this.user = { name: u.User_Name || u.Email_ID, full: u.Title || u.User_Name, level: u.Access_Level || 'User', super: /^super/i.test(u.Access_Level || ''), email: u.Email_ID, region: u.Region, _id: u._id };
-    return this.user;
+    const c = lulCfg(), spOn = c.on && c.pwOn && DB.isSP();
+    let u = Users.find(name);
+    if (u && u.hash && (await hashPassword(pw, u.salt)) === u.hash) { /* local password */ }
+    else if (spOn && !(u && u.builtin)) { const r = await lulLogin(name, pw); if (r.state !== 'ok') throw new Error(r.state === 'unreach' ? 'Could not reach the SharePoint login list: ' + r.msg : r.msg); u = r.user; }
+    else throw new Error('Invalid username or password.');
+    u.lastLogin = Date.now(); Users.save();
+    if (u.spItem && DB.isSP()) { try { const rows = await DB.all(USERS_LIST); const e = rows.find(x => x._id === u.spItem); if (e) { e.Last_Login_TimeStamp = nowIso(); e.Current_Login_Status = 'Online'; DB._sys = 1; DB.save(USERS_LIST, e).catch(() => {}).finally(() => { DB._sys = 0; }); } } catch (e) {} }
+    return this.session(u);
   },
-  async logout() { const u = this.user; if (u && u._id) { const e = DB.peek(USERS_LIST).find(x => x._id === u._id); if (e) { e.Current_Login_Status = 'Offline'; e.Last_LogOut_TimeStamp = nowIso(); DB.save(USERS_LIST, e).catch(() => {}); } } this.user = null; sessionStorage.removeItem(APP.ls + '_user'); },
+  async logout() { const u = this.rec; if (u && u.spItem && DB.isSP()) { const e = DB.peek(USERS_LIST).find(x => x._id === u.spItem); if (e) { e.Current_Login_Status = 'Offline'; e.Last_LogOut_TimeStamp = nowIso(); DB._sys = 1; DB.save(USERS_LIST, e).catch(() => {}); } } this.user = this.rec = null; sessionStorage.removeItem(APP.ls + '_user'); },
 };
 const me = () => (Auth.user && (Auth.user.full || Auth.user.name)) || 'System';

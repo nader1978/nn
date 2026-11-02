@@ -7,7 +7,7 @@
 <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d4ed8'/%3E%3Ctext x='32' y='44' font-size='34' text-anchor='middle'%3E%F0%9F%8F%AD%3C/text%3E%3C/svg%3E" />
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <link rel="stylesheet" href="css/app.css">
-<script>try{var a=localStorage.getItem('sp_dashboard_secure_v12_accent');if(a&&a!=='blue')document.documentElement.setAttribute('data-accent',a)}catch(e){}</script>
+<script>try{var z={};try{z=JSON.parse(localStorage.getItem('nfpcsc_brand_cen')||'{}')||{}}catch(e){}var a=(z.force&&z.accent)?z.accent:(localStorage.getItem('sp_dashboard_secure_v12_accent')||z.accent||'nfpc');if(a!=='blue')document.documentElement.setAttribute('data-accent',a);if((z.login||JSON.parse(localStorage.getItem('nfpcsc_loginbg')||'""'))==='white')document.documentElement.setAttribute('data-login','white')}catch(e){}</script>
 </head>
 <body>
 <!-- ================= LOGIN (same layout as SC Mngt) ================= -->
@@ -86,6 +86,7 @@
 
 <script src="js/00-config.js"></script>
 <script src="js/00b-nfpc-access-config.js"></script>
+<script src="js/00c-logos.js"></script>
 <script src="js/01-core.js"></script>
 <script src="js/02-data.js"></script>
 <script src="js/03-ui.js"></script>
@@ -94,6 +95,7 @@
 <script src="js/06-print.js"></script>
 <script src="js/07-pages-access-forms.js"></script>
 <script src="js/08-reports.js"></script>
+<script src="js/085-config-themes-admin.js"></script>
 <script src="js/09-admin-boot.js"></script>
 </body>
 </html>

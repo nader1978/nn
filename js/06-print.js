@@ -15,11 +15,11 @@ const absUrl = u => !u ? '' : /^(data:|https?:)/.test(u) ? u : new URL(u, locati
 /* logo pictures are embedded into each document (print windows cannot load picture files reliably) */
 const DOC_IMG = {};
 async function docImg(u) { if (!u || u.startsWith('data:')) return u || ''; if (DOC_IMG[u]) return DOC_IMG[u]; try { const r = await fetch(absUrl(u)); const bl = await r.blob(); DOC_IMG[u] = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(bl); }); } catch (e) { DOC_IMG[u] = absUrl(u); } return DOC_IMG[u]; }
-function preloadDocImages() { [BRAND_ORIG.full, BRAND_ORIG.img, brandGet().img].forEach(u => u && docImg(u)); }
+function preloadDocImages() { [brandGet().img].forEach(u => u && docImg(u)); }
 const docSrc = u => !u ? '' : u.startsWith('data:') ? u : (DOC_IMG[u] || absUrl(u));
 function printDoc(title, inner, o = {}) {
-  const c = company(), b = brandGet(), w = window.open('', '_blank'); if (!w) { toast('Allow pop-ups to print.', 'warn'); return; }
-  const logo = docSrc(b.img || BRAND_ORIG.full || ''), mark = docSrc(BRAND_ORIG.img || ''), wmark = docSrc(BRAND_ORIG.full || b.img || '');
+  const c = docCompany(), b = brandGet(), w = window.open('', '_blank'); if (!w) { toast('Allow pop-ups to print.', 'warn'); return; }
+  const logo = docSrc(b.img || ''), mark = logo, wmark = logo;
   const meta = (o.meta || []).filter(m => m[1] !== undefined && m[1] !== null && m[1] !== '');
   const contact = [c.TelephoneNumber && '☎ ' + c.TelephoneNumber, c.Email && '✉ ' + c.Email, c.Website && '🌐 ' + c.Website].filter(Boolean).map(esc).join('&nbsp;&nbsp;·&nbsp;&nbsp;');
   const D = docColors();
@@ -62,7 +62,7 @@ function printDoc(title, inner, o = {}) {
     p{margin:8px 0}
     @media print{.bar{display:none}body{padding:0}.ft{padding:5px 12mm;font-size:9.5px}.fspace{height:16mm}}</style></head><body>
     ${wmark ? `<img class="wm" src="${wmark}" alt="">` : `<div class="wm wmt">${esc((brandGet().name || BRAND_ORIG.name).split(' ')[0])}</div>`}
-    <div class="bar"><button onclick="print()">🖨 Print / Save PDF</button></div>
+    <div class="bar"><button onclick="try{opener.NFPCmailDoc(document.title,'<style>'+document.querySelector('style').textContent.split('position:fixed').join('position:static')+'</style>'+document.querySelector('.doc').outerHTML)}catch(e){alert('Open the e-mail window from the system page.')}" style="margin-right:6px">✉ Email</button><button onclick="print()">🖨 Print / Save PDF</button></div>
     <table class="page"><tbody><tr><td><div class="doc">
     ${o.stamp ? `<div class="stamp ${o.stamp.cls}">${esc(o.stamp.t)}</div>` : ''}
     <div class="hd"><div class="brand">${logo ? `<img src="${logo}" alt="logo">` : ''}<div><div class="co">${esc(c.CompanyFullName || 'Company name')}</div>${c.ArabicName ? `<div class="co2">${esc(c.ArabicName)}</div>` : ''}<div class="meta">${esc([c.Address, c.City, c.Country].filter(Boolean).join(', '))}${c.POBox ? ' · P.O. Box ' + esc(c.POBox) : ''}${c.BusinessType ? '<br>' + esc(c.BusinessType) : ''}</div></div></div>
